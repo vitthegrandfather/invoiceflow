@@ -1,0 +1,82 @@
+{
+  "name": "InvoiceFlow Error Handler",
+  "description": "Captures unattended workflow failures, classifies retryability, redacts sensitive numeric data, and records a simulated operations alert through the InvoiceFlow API.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1e30000-0000-4000-8000-000000000001",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $input.first().json;\nconst exec = src.execution || {};\nconst payload = {\n  workflow: exec.workflowId || src.workflow || 'unknown',\n  execution_id: exec.id || src.executionId || null,\n  failed_node: exec.lastNodeExecuted || src.node || null,\n  category: /5\\d\\d/.test(String(src.message || '')) ? 'transient' : 'application',\n  retryable: !String(src.message || '').includes('422'),\n  message: String(src.message || src.error || 'workflow failed').slice(0, 500),\n  invoice_public_id: src.invoice_public_id || src.public_id || null,\n  timestamp: new Date().toISOString(),\n  redacted: true\n};\nreturn [{ json: payload }];"
+      },
+      "id": "a1e30000-0000-4000-8000-000000000002",
+      "name": "Capture error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300],
+      "notes": "Creates a bounded, structured failure payload from n8n execution context."
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst retryable = Boolean(row.retryable);\nreturn [{ json: { ...row, retryability: retryable ? 'retryable' : 'dead_letter' } }];"
+      },
+      "id": "a1e30000-0000-4000-8000-000000000003",
+      "name": "Classify retryability",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300],
+      "notes": "Separates retryable infrastructure failures from fatal business errors."
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst redacted = String(row.message || '').replace(/\\b(?:\\d[ -]?){8,}\\d\\b/g, '••••');\nreturn [{ json: { ...row, message: redacted } }];"
+      },
+      "id": "a1e30000-0000-4000-8000-000000000004",
+      "name": "Redact payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300],
+      "notes": "Redacts long account-like digit sequences before the simulated alert is stored."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/ops/alerts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify($json)}}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a1e30000-0000-4000-8000-000000000005",
+      "name": "Notify ops channel (simulated)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": { "id": "invoiceflow-api", "name": "InvoiceFlow API" }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": { "main": [[{ "node": "Capture error", "type": "main", "index": 0 }]] },
+    "Capture error": { "main": [[{ "node": "Classify retryability", "type": "main", "index": 0 }]] },
+    "Classify retryability": { "main": [[{ "node": "Redact payload", "type": "main", "index": 0 }]] },
+    "Redact payload": { "main": [[{ "node": "Notify ops channel (simulated)", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": [{ "name": "invoiceflow" }]
+}

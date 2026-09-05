@@ -1,0 +1,11 @@
+node_modules
+.output
+.git
+.github
+portfolio
+backend/.pytest_cache
+backend/.mypy_cache
+backend/.ruff_cache
+backend/**/__pycache__
+*.log
+.env

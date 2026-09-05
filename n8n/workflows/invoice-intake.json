@@ -1,0 +1,322 @@
+{
+  "name": "InvoiceFlow Invoice Intake",
+  "description": "Accepts a normalized invoice payload, enforces integer-cent and currency rules, and sends it through the InvoiceFlow sandbox API. Every result remains subject to human review; the workflow never auto-approves an invoice.",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## InvoiceFlow intake (fictional demo)\nAuthenticated webhook → validate shape → idempotency key → FastAPI ingest → extract → validate → branch (review / duplicate / validated). **Never auto-approves.** Uses the Docker service URL and credential **InvoiceFlow API**. No real email or OCR vendor is contacted.",
+        "height": 220,
+        "width": 360
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000001",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice-intake",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000010",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "webhookId": "invoiceflow-invoice-intake",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "invoiceflow-webhook",
+          "name": "InvoiceFlow Webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json;\nconst missing = [];\nfor (const key of ['vendor_name','invoice_number','currency','issue_date','due_date','subtotal_cents','tax_cents','total_cents']) {\n  if (body[key] === undefined || body[key] === null || body[key] === '') missing.push(key);\n}\nif (missing.length) {\n  throw new Error('Invalid intake payload. Missing: ' + missing.join(', '));\n}\nconst centsKeys = ['subtotal_cents','tax_cents','total_cents','size_bytes'];\nfor (const key of centsKeys) {\n  if (body[key] !== undefined && !Number.isInteger(body[key])) {\n    throw new Error(key + ' must be an integer (cents). Float money is rejected.');\n  }\n}\nconst allowed = ['USD','EUR','GBP'];\nif (!allowed.includes(body.currency)) throw new Error('Unsupported currency');\nconst source = body.source || 'email_webhook';\nreturn [{ json: { ...body, source, filename: body.filename || 'invoice.pdf', content_type: body.content_type || 'application/pdf' } }];"
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000020",
+      "name": "Validate shape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300],
+      "notes": "Rejects missing fields, non-integer monetary values, and unsupported currencies before any API mutation.",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst key = item.idempotency_key || ['ing', item.source, item.vendor_name, item.invoice_number, item.issue_date, String(item.total_cents)].join(':').replace(/\\s+/g, '_').slice(0, 160);\nreturn [{ json: { ...item, idempotency_key: key } }];"
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000030",
+      "name": "Idempotency key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300],
+      "notes": "Builds a stable idempotency key when the caller does not provide one.",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/invoices/ingest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Idempotency-Key", "value": "={{$json.idempotency_key}}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({ vendor_name: $json.vendor_name, invoice_number: $json.invoice_number, currency: $json.currency, issue_date: $json.issue_date, due_date: $json.due_date, subtotal_cents: $json.subtotal_cents, tax_cents: $json.tax_cents, total_cents: $json.total_cents, source: $json.source, filename: $json.filename, content_type: $json.content_type, notes: $json.notes || '', po_number: $json.po_number || null, idempotency_key: $json.idempotency_key, line_items: $json.line_items || [] })}}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000040",
+      "name": "Submit to FastAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "invoiceflow-api",
+          "name": "InvoiceFlow API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://api:8000/invoices/{{$json.public_id}}/extract",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 20000 }
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000050",
+      "name": "Start extraction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1360, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "invoiceflow-api",
+          "name": "InvoiceFlow API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://api:8000/invoices/{{$json.public_id}}/validate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 15000 }
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000060",
+      "name": "Run validation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1580, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "invoiceflow-api",
+          "name": "InvoiceFlow API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "sw-dup",
+                    "leftValue": "={{$json.status}}",
+                    "rightValue": "DUPLICATE",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "sw-val",
+                    "leftValue": "={{$json.status}}",
+                    "rightValue": "VALIDATED",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000070",
+      "name": "Switch status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1800, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "b1", "name": "branch", "value": "duplicate", "type": "string" },
+            { "id": "b2", "name": "note", "value": "Probable duplicate retained. No automatic merge.", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000080",
+      "name": "Flag duplicate",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2040, 140]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "b3", "name": "branch", "value": "validated", "type": "string" },
+            { "id": "b4", "name": "note", "value": "Validated but not approved. Policy: human approval required.", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000090",
+      "name": "Record validated",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2040, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "b5", "name": "branch", "value": "review", "type": "string" },
+            { "id": "b6", "name": "note", "value": "Routed to review queue. No automatic approval.", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000100",
+      "name": "Route to review",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2040, 460]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/workflows/executions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({ workflow: 'invoice-intake', invoice_public_id: $('Run validation').item.json.public_id, status: 'succeeded', version: '1.4.0', duration_ms: 1800, n8n_execution_id: $execution.id, nodes: [{ name: 'Webhook', status: 'succeeded' }, { name: 'Validate shape', status: 'succeeded' }, { name: 'Idempotency key', status: 'succeeded' }, { name: 'Submit to FastAPI', status: 'succeeded' }, { name: 'Start extraction', status: 'succeeded' }, { name: 'Run validation', status: 'succeeded' }, { name: 'Branch', status: 'succeeded', note: $json.note }] })}}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000110",
+      "name": "Record execution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2280, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "invoiceflow-api",
+          "name": "InvoiceFlow API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, invoice_public_id: $('Run validation').item.json.public_id, status: $('Run validation').item.json.status, branch: $('Record execution').item.json.public_id ? $('Switch status').item.json.status : 'recorded', demo: true, note: 'Fictional intake. No real mailbox was read.' } }}",
+        "options": {}
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000120",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2500, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'validation_error', message: $json.error?.message || $json.message || 'Invalid invoice payload' } }}",
+        "options": { "responseCode": 400 }
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000130",
+      "name": "Respond validation error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1140, 560]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'upstream_error', message: $json.error?.message || $json.message || 'InvoiceFlow API request failed' } }}",
+        "options": { "responseCode": 502 }
+      },
+      "id": "aaaaaaaa-0001-4000-8000-000000000140",
+      "name": "Respond upstream error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2040, 640]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Validate shape", "type": "main", "index": 0 }]] },
+    "Validate shape": { "main": [[{ "node": "Idempotency key", "type": "main", "index": 0 }], [{ "node": "Respond validation error", "type": "main", "index": 0 }]] },
+    "Idempotency key": { "main": [[{ "node": "Submit to FastAPI", "type": "main", "index": 0 }], [{ "node": "Respond upstream error", "type": "main", "index": 0 }]] },
+    "Submit to FastAPI": { "main": [[{ "node": "Start extraction", "type": "main", "index": 0 }], [{ "node": "Respond upstream error", "type": "main", "index": 0 }]] },
+    "Start extraction": { "main": [[{ "node": "Run validation", "type": "main", "index": 0 }], [{ "node": "Respond upstream error", "type": "main", "index": 0 }]] },
+    "Run validation": { "main": [[{ "node": "Switch status", "type": "main", "index": 0 }], [{ "node": "Respond upstream error", "type": "main", "index": 0 }]] },
+    "Switch status": {
+      "main": [
+        [{ "node": "Flag duplicate", "type": "main", "index": 0 }],
+        [{ "node": "Record validated", "type": "main", "index": 0 }],
+        [{ "node": "Route to review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Flag duplicate": { "main": [[{ "node": "Record execution", "type": "main", "index": 0 }]] },
+    "Record validated": { "main": [[{ "node": "Record execution", "type": "main", "index": 0 }]] },
+    "Route to review": { "main": [[{ "node": "Record execution", "type": "main", "index": 0 }]] },
+    "Record execution": { "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }], [{ "node": "Respond upstream error", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": [{ "name": "invoiceflow" }, { "name": "demo" }]
+}
