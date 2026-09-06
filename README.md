@@ -2,6 +2,8 @@
 
 InvoiceFlow is a **fictional portfolio demonstration** of an invoice-processing and accounts-payable automation workspace. Every company, vendor, invoice, email address, bank suffix, and metric is invented. It never contacts real accounting, banking, email, Slack, QuickBooks, Xero, or other external services.
 
+**[Open the interactive demo](https://invoiceflow-chi-six.vercel.app)**
+
 The product shows how incoming invoices can be extracted, validated, reviewed by a human, and synchronized with a **sandbox** accounting adapter through importable n8n workflows.
 
 ![InvoiceFlow operations overview](portfolio/01-overview.png)
